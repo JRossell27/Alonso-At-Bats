@@ -514,7 +514,7 @@ def create_gif_quote_tweet(original_tweet_id, play_data, game_data):
                 return True
                 
         else:
-            logger.warning(f"Failed to create GIF for tweet {original_tweet_id}")
+            logger.info(f"⏳ GIF not yet available for tweet {original_tweet_id} - video may not be ready on Baseball Savant")
             return False
             
     except Exception as e:
@@ -536,29 +536,73 @@ def process_gif_queue():
                 game_data = item['game_data']
                 timestamp = item['timestamp']
                 
-                # Give the original tweet a minute to settle before creating GIF
-                if (datetime.now() - timestamp).total_seconds() < 60:
+                # Track retry attempts and timing
+                if 'attempts' not in item:
+                    item['attempts'] = 0
+                    item['last_attempt'] = None
+                
+                # Calculate time since original at-bat
+                time_since_at_bat = (datetime.now() - timestamp).total_seconds()
+                
+                # Give up after 30 minutes of trying
+                if time_since_at_bat > 1800:  # 30 minutes
+                    logger.warning(f"❌ Giving up on GIF for tweet {tweet_id} after 30 minutes")
+                    items_to_remove.append(i)
                     continue
                 
-                logger.info(f"Processing GIF for tweet {tweet_id}")
-                
-                # Try to create GIF quote tweet
-                success = create_gif_quote_tweet(tweet_id, play_data, game_data)
-                
-                if success:
-                    logger.info(f"✅ GIF quote tweet completed for {tweet_id}")
+                # Exponential backoff for retry attempts
+                # Start checking after 30 seconds, then 1 min, 2 min, 4 min, 8 min, etc.
+                if item['attempts'] == 0:
+                    wait_time = 30  # First attempt after 30 seconds
                 else:
-                    logger.warning(f"❌ GIF quote tweet failed for {tweet_id}")
+                    wait_time = min(60 * (2 ** (item['attempts'] - 1)), 600)  # Max 10 minutes between attempts
                 
-                # Remove from queue regardless of success/failure
-                items_to_remove.append(i)
+                # Check if enough time has passed since last attempt
+                if item['last_attempt']:
+                    time_since_last_attempt = (datetime.now() - item['last_attempt']).total_seconds()
+                    if time_since_last_attempt < wait_time:
+                        continue
+                else:
+                    # First attempt - wait initial period
+                    if time_since_at_bat < 30:
+                        continue
+                
+                # Attempt to create GIF
+                item['attempts'] += 1
+                item['last_attempt'] = datetime.now()
+                
+                logger.info(f"🎬 Attempting to create GIF for tweet {tweet_id} (attempt {item['attempts']}, {time_since_at_bat:.0f}s after at-bat)")
+                
+                try:
+                    # Try to create GIF quote tweet
+                    success = create_gif_quote_tweet(tweet_id, play_data, game_data)
+                    
+                    if success:
+                        logger.info(f"✅ GIF quote tweet completed for {tweet_id} after {item['attempts']} attempts")
+                        items_to_remove.append(i)
+                    else:
+                        logger.info(f"⏳ GIF not yet available for tweet {tweet_id}, will retry in {wait_time}s (attempt {item['attempts']})")
+                        
+                        # Give up after 10 attempts
+                        if item['attempts'] >= 10:
+                            logger.warning(f"❌ Giving up on GIF for tweet {tweet_id} after {item['attempts']} attempts")
+                            items_to_remove.append(i)
+                
+                except Exception as e:
+                    logger.error(f"Error creating GIF for tweet {tweet_id} (attempt {item['attempts']}): {str(e)}")
+                    
+                    # Give up after 10 attempts
+                    if item['attempts'] >= 10:
+                        logger.warning(f"❌ Giving up on GIF for tweet {tweet_id} after {item['attempts']} attempts due to errors")
+                        items_to_remove.append(i)
             
-            # Remove processed items (in reverse order to maintain indices)
+            # Remove processed/failed items (in reverse order to maintain indices)
             for i in reversed(items_to_remove):
-                tweet_gif_queue.pop(i)
+                removed_item = tweet_gif_queue.pop(i)
+                logger.debug(f"Removed tweet {removed_item['tweet_id']} from GIF queue")
             
-            # Sleep before next check
-            time.sleep(30)  # Check every 30 seconds
+            # Sleep before next check - check more frequently
+            time.sleep(15)  # Check every 15 seconds for more responsive monitoring
             
         except Exception as e:
             logger.error(f"Error in GIF processing thread: {str(e)}")
