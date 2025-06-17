@@ -522,6 +522,8 @@ def background_checker():
     """Background thread to check for Alonso's at-bats"""
     while True:
         check_alonso_at_bats()
+        # Keep the service alive to prevent spin-down
+        keep_alive()
         time.sleep(120)  # Wait 2 minutes between checks
 
 @app.route('/')
