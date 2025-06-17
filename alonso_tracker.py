@@ -10,6 +10,15 @@ import random
 import gc  # For garbage collection
 from flask import Flask, render_template
 import threading
+from pathlib import Path
+
+# Import our GIF integration module
+try:
+    from baseball_savant_gif_integration import BaseballSavantGIFIntegration
+    GIF_INTEGRATION_AVAILABLE = True
+except ImportError:
+    GIF_INTEGRATION_AVAILABLE = False
+    logging.warning("GIF integration not available - install ffmpeg and ffmpeg-python for GIF support")
 
 # Suppress SyntaxWarnings from tweepy
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -46,12 +55,26 @@ if not TEST_MODE:
             access_token_secret=os.getenv('TWITTER_ACCESS_TOKEN_SECRET'),
             bearer_token=os.getenv('TWITTER_BEARER_TOKEN')
         )
-        logger.info("Twitter client initialized successfully")
+        
+        # Also set up the v1.1 API for media uploads and quote tweets
+        auth = tweepy.OAuthHandler(
+            os.getenv('TWITTER_API_KEY'),
+            os.getenv('TWITTER_API_SECRET')
+        )
+        auth.set_access_token(
+            os.getenv('TWITTER_ACCESS_TOKEN'),
+            os.getenv('TWITTER_ACCESS_TOKEN_SECRET')
+        )
+        api_v1 = tweepy.API(auth, wait_on_rate_limit=True)
+        
+        logger.info("Twitter clients initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize Twitter client: {str(e)}")
+        logger.error(f"Failed to initialize Twitter clients: {str(e)}")
+        api_v1 = None
 
-# Keep track of processed at-bats
+# Keep track of processed at-bats and their tweet IDs for GIF follow-ups
 processed_at_bats = set()
+tweet_gif_queue = []  # Store (tweet_id, play_data) for GIF processing
 
 # Track last check time and status
 last_check_time = None
@@ -60,6 +83,13 @@ last_check_status = "Initializing..."
 # Cache for season stats to avoid repeated API calls
 season_stats_cache = {}
 cache_timestamp = None
+
+# Initialize GIF integration if available
+if GIF_INTEGRATION_AVAILABLE:
+    gif_integration = BaseballSavantGIFIntegration()
+    logger.info("GIF integration initialized")
+else:
+    gif_integration = None
 
 def get_alonso_id():
     """Get Pete Alonso's MLB ID (hardcoded for reliability)"""
@@ -376,6 +406,164 @@ def generate_test_at_bat():
         
         return result
 
+def post_tweet_with_gif_followup(tweet_text, play_data, game_data=None):
+    """Post immediate tweet and queue GIF follow-up"""
+    try:
+        # Post immediate tweet
+        if not TEST_MODE and client:
+            response = client.create_tweet(text=tweet_text)
+            tweet_id = response.data['id']
+            logger.info(f"Immediate tweet posted: {tweet_id}")
+            
+            # Queue for GIF follow-up if available
+            if gif_integration and game_data:
+                tweet_gif_queue.append({
+                    'tweet_id': tweet_id,
+                    'play_data': play_data,
+                    'game_data': game_data,
+                    'timestamp': datetime.now()
+                })
+                logger.info(f"Queued for GIF follow-up: {tweet_id}")
+            
+            return tweet_id
+        else:
+            logger.info(f"TEST MODE - Would tweet: {tweet_text}")
+            if gif_integration and game_data:
+                # Even in test mode, queue for GIF testing
+                fake_tweet_id = f"test_{int(time.time())}"
+                tweet_gif_queue.append({
+                    'tweet_id': fake_tweet_id,
+                    'play_data': play_data,
+                    'game_data': game_data,
+                    'timestamp': datetime.now()
+                })
+                logger.info(f"TEST MODE - Queued for GIF follow-up: {fake_tweet_id}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error posting tweet: {str(e)}")
+        return None
+
+def create_gif_quote_tweet(original_tweet_id, play_data, game_data):
+    """Create a quote tweet with just the GIF"""
+    try:
+        if not gif_integration:
+            logger.warning("GIF integration not available")
+            return False
+            
+        logger.info(f"Creating GIF for tweet {original_tweet_id}")
+        
+        # Extract relevant data for GIF creation
+        game_id = game_data.get('game_id')
+        play_id = play_data.get('play_id', 1)
+        game_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Create MLB play data structure for GIF matching
+        mlb_play_data = {
+            'result': {
+                'event': play_data.get('description', '')
+            },
+            'about': {
+                'inning': play_data.get('inning', 1)
+            },
+            'matchup': {
+                'batter': {
+                    'id': 624413,  # Pete Alonso's ID
+                    'fullName': 'Pete Alonso'
+                }
+            }
+        }
+        
+        # Create the GIF
+        gif_path = gif_integration.get_gif_for_play(
+            game_id=game_id,
+            play_id=play_id,
+            game_date=game_date,
+            mlb_play_data=mlb_play_data
+        )
+        
+        if gif_path and Path(gif_path).exists():
+            logger.info(f"GIF created successfully: {gif_path}")
+            
+            # Create quote tweet text - just the visual emoji and credit
+            quote_text = f"🎬 Watch the play\n\nAnimation courtesy of @baseballsavant"
+            
+            if not TEST_MODE and api_v1:
+                # Upload GIF
+                media = api_v1.media_upload(gif_path)
+                
+                # Create quote tweet by replying to the original tweet with media
+                quote_tweet = api_v1.update_status(
+                    status=quote_text,
+                    media_ids=[media.media_id],
+                    in_reply_to_status_id=original_tweet_id,
+                    auto_populate_reply_metadata=False  # Don't include @mentions
+                )
+                
+                logger.info(f"🎬 GIF quote tweet posted: {quote_tweet.id}")
+                
+                # Clean up the GIF file
+                Path(gif_path).unlink(missing_ok=True)
+                logger.info(f"Cleaned up GIF file: {gif_path}")
+                
+                return True
+            else:
+                logger.info(f"TEST MODE - Would post GIF quote tweet for {original_tweet_id}")
+                logger.info(f"GIF path: {gif_path}")
+                logger.info(f"Quote text: {quote_text}")
+                return True
+                
+        else:
+            logger.warning(f"Failed to create GIF for tweet {original_tweet_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error creating GIF quote tweet for {original_tweet_id}: {str(e)}")
+        return False
+
+def process_gif_queue():
+    """Background thread to process queued tweets for GIF creation"""
+    logger.info("🎬 Starting GIF processing thread...")
+    
+    while True:
+        try:
+            # Process queued items
+            items_to_remove = []
+            
+            for i, item in enumerate(tweet_gif_queue):
+                tweet_id = item['tweet_id']
+                play_data = item['play_data']
+                game_data = item['game_data']
+                timestamp = item['timestamp']
+                
+                # Give the original tweet a minute to settle before creating GIF
+                if (datetime.now() - timestamp).total_seconds() < 60:
+                    continue
+                
+                logger.info(f"Processing GIF for tweet {tweet_id}")
+                
+                # Try to create GIF quote tweet
+                success = create_gif_quote_tweet(tweet_id, play_data, game_data)
+                
+                if success:
+                    logger.info(f"✅ GIF quote tweet completed for {tweet_id}")
+                else:
+                    logger.warning(f"❌ GIF quote tweet failed for {tweet_id}")
+                
+                # Remove from queue regardless of success/failure
+                items_to_remove.append(i)
+            
+            # Remove processed items (in reverse order to maintain indices)
+            for i in reversed(items_to_remove):
+                tweet_gif_queue.pop(i)
+            
+            # Sleep before next check
+            time.sleep(30)  # Check every 30 seconds
+            
+        except Exception as e:
+            logger.error(f"Error in GIF processing thread: {str(e)}")
+            time.sleep(60)
+
 def check_alonso_at_bats():
     """Check for Alonso's at-bats and tweet if found"""
     global last_check_time, last_check_status
@@ -406,7 +594,9 @@ def check_alonso_at_bats():
                     'barrel_classification': test_at_bat.get('barrel_classification', ''),
                     'xba': test_at_bat.get('xba', 'N/A'),
                     'hit_distance': test_at_bat.get('hit_distance', 'N/A'),
-                    'rbi_on_play': test_at_bat.get('rbi_on_play', 0)
+                    'rbi_on_play': test_at_bat.get('rbi_on_play', 0),
+                    'play_id': test_at_bat.get('at_bat_number', 1),
+                    'inning': test_at_bat.get('inning', 1)
                 }
                 
                 # Add strikeout data if it's a strikeout
@@ -418,12 +608,17 @@ def check_alonso_at_bats():
                         'pitch_location': test_at_bat.get('pitch_location', 'N/A')
                     })
                 
+                # Create fake game data for testing
+                game_data = {
+                    'game_id': 12345,  # Fake game ID for testing
+                    'home_team': 'NYM',
+                    'away_team': 'ATL'
+                }
+                
                 tweet = format_tweet(play_data)
-                if TEST_MODE:
-                    logger.info(f"TEST MODE - Would tweet: {tweet}")
-                else:
-                    client.create_tweet(text=tweet)
-                    logger.info(f"Tweeted: {tweet}")
+                
+                # Post tweet with GIF follow-up
+                tweet_id = post_tweet_with_gif_followup(tweet, play_data, game_data)
                 
                 processed_at_bats.add(at_bat_id)
                 last_check_status = f"Found test at-bat: {test_at_bat['description']} {test_at_bat.get('situation', '')}"
@@ -433,7 +628,7 @@ def check_alonso_at_bats():
                 last_check_status = f"Duplicate at-bat skipped: {test_at_bat['description']}"
         else:
             # Get current game data
-            game_data = get_current_game()
+            game_data_response = get_current_game()
             
             # Get Alonso's recent at-bats with enhanced data
             url = f"https://statsapi.mlb.com/api/v1/people/{alonso_id}/stats"
@@ -481,7 +676,9 @@ def check_alonso_at_bats():
                                     'xba': hit_data.get('xba', 'N/A'),
                                     'barrel_classification': 'Barrel' if hit_data.get('isBarrel') else 'Hard Hit' if hit_data.get('launchSpeed', 0) > 95 else '',
                                     'situation': get_situational_context(),  # Could be enhanced with real game situation
-                                    'rbi_on_play': at_bat.get('result', {}).get('rbi', 0)
+                                    'rbi_on_play': at_bat.get('result', {}).get('rbi', 0),
+                                    'play_id': at_bat.get('atBatIndex', 1),
+                                    'inning': at_bat.get('inning', 1)
                                 }
                                 
                                 # Add strikeout data if it's a strikeout
@@ -493,9 +690,23 @@ def check_alonso_at_bats():
                                         'pitch_location': f"Zone {pitch_data.get('zone', 'N/A')}" if pitch_data.get('zone') else 'N/A'
                                     })
                                 
+                                # Extract game data for GIF creation
+                                game_data = None
+                                if live_data and 'dates' in live_data:
+                                    for date_data in live_data['dates']:
+                                        for live_game in date_data.get('games', []):
+                                            # Try to match with current game
+                                            game_data = {
+                                                'game_id': live_game.get('gamePk'),
+                                                'home_team': live_game.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', ''),
+                                                'away_team': live_game.get('teams', {}).get('away', {}).get('team', {}).get('abbreviation', '')
+                                            }
+                                            break
+                                
                                 tweet = format_tweet(play_data)
-                                client.create_tweet(text=tweet)
-                                logger.info(f"Tweeted: {tweet}")
+                                
+                                # Post tweet with GIF follow-up
+                                tweet_id = post_tweet_with_gif_followup(tweet, play_data, game_data)
                                 
                                 processed_at_bats.add(at_bat_id)
                                 last_check_status = f"Found at-bat: {result_event} {play_data.get('situation', '')}"
@@ -584,6 +795,7 @@ if __name__ == "__main__":
     logger.info(f"TEST_MODE: {TEST_MODE}")
     logger.info(f"DEPLOYMENT_TEST: {DEPLOYMENT_TEST}")
     logger.info(f"ALONSO_MLB_ID: {ALONSO_MLB_ID}")
+    logger.info(f"GIF Integration: {'Available' if GIF_INTEGRATION_AVAILABLE else 'Not Available'}")
     
     # Send deployment test tweet if enabled
     if DEPLOYMENT_TEST and not TEST_MODE:
@@ -594,6 +806,13 @@ if __name__ == "__main__":
             logger.error("❌ Failed to send deployment test tweet")
     elif DEPLOYMENT_TEST and TEST_MODE:
         logger.info("⚠️ DEPLOYMENT_TEST enabled but in TEST_MODE - no tweet will be sent")
+    
+    # Start the GIF processing thread if available
+    if GIF_INTEGRATION_AVAILABLE:
+        logger.info("Starting GIF processing thread...")
+        gif_thread = threading.Thread(target=process_gif_queue, daemon=True)
+        gif_thread.start()
+        logger.info("GIF processing thread started")
     
     # Start the background checker thread
     logger.info("Starting background checker thread...")
