@@ -18,7 +18,7 @@ import json
 
 # Import our modules
 from discord_integration import post_home_run
-from baseball_savant_gif_integration import BaseballSavantGifGenerator
+from baseball_savant_gif_integration import BaseballSavantGIFIntegration
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +63,7 @@ class MetsHomeRunTracker:
         
         # Initialize GIF generator
         try:
-            self.gif_generator = BaseballSavantGifGenerator()
+            self.gif_generator = BaseballSavantGIFIntegration()
             logger.info("GIF integration initialized")
         except Exception as e:
             logger.error(f"Failed to initialize GIF generator: {e}")
@@ -278,11 +278,21 @@ class MetsHomeRunTracker:
                     
                     # Try to create GIF
                     if self.gif_generator:
-                        gif_path = self.gif_generator.create_gif_for_play(
+                        # Get game date for Baseball Savant
+                        game_date = datetime.now().strftime('%Y-%m-%d')
+                        
+                        # Create a simple MLB play data structure for the GIF generator
+                        mlb_play_data = {
+                            'result': {'event': 'Home Run'},
+                            'about': {'inning': home_run.inning},
+                            'matchup': {'batter': {'id': None}}  # We'll need to adapt this
+                        }
+                        
+                        gif_path = self.gif_generator.get_gif_for_play(
                             home_run.game_pk,
-                            home_run.play_id,
-                            home_run.player_name,
-                            home_run.inning
+                            0,  # play_id - we'll use 0 as placeholder
+                            game_date,
+                            mlb_play_data
                         )
                         home_run.gif_path = gif_path
                         
