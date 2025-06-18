@@ -335,6 +335,43 @@ DASHBOARD_HTML = '''
                 .catch(error => console.error('Keep-alive error:', error));
         }
         
+        function testDiscord() {
+            const button = document.getElementById('test-discord-btn');
+            const statusDiv = document.getElementById('discord-test-status');
+            
+            // Disable button and show loading
+            button.disabled = true;
+            button.textContent = 'Testing...';
+            statusDiv.innerHTML = '🔄 Testing Discord webhook...';
+            statusDiv.style.color = '#ff5910';
+            
+            fetch('/api/test-discord', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        statusDiv.innerHTML = '✅ ' + data.message;
+                        statusDiv.style.color = '#4CAF50';
+                    } else {
+                        statusDiv.innerHTML = '❌ ' + data.error;
+                        statusDiv.style.color = '#f44336';
+                    }
+                })
+                .catch(error => {
+                    statusDiv.innerHTML = '❌ Network error: ' + error.message;
+                    statusDiv.style.color = '#f44336';
+                })
+                .finally(() => {
+                    // Re-enable button
+                    button.disabled = false;
+                    button.textContent = 'Test Discord Webhook';
+                    
+                    // Clear status after 10 seconds
+                    setTimeout(() => {
+                        statusDiv.innerHTML = '';
+                    }, 10000);
+                });
+        }
+        
         // Auto-refresh every 30 seconds
         setInterval(refreshStatus, 30000);
         
@@ -414,6 +451,16 @@ DASHBOARD_HTML = '''
                     <h3>Processed Plays</h3>
                     <div class="status-value" id="processed-plays">--</div>
                 </div>
+            </div>
+        </div>
+        
+        <div class="stats-section">
+            <h2>🧪 Discord Integration Test</h2>
+            <div class="status-card" style="text-align: center; max-width: 500px; margin: 0 auto;">
+                <h3>Test Discord Webhook</h3>
+                <p style="color: #ccc; margin: 10px 0;">Click below to send a test message to your Discord channel and verify the webhook is working correctly.</p>
+                <button class="btn" id="test-discord-btn" onclick="testDiscord()">Test Discord Webhook</button>
+                <div id="discord-test-status" style="margin-top: 15px; font-weight: bold;"></div>
             </div>
         </div>
         
@@ -592,6 +639,35 @@ def ping():
         'timestamp': datetime.now().isoformat(),
         'service': 'mets-homerun-tracker'
     })
+
+@app.route('/api/test-discord', methods=['POST'])
+def test_discord():
+    """Test Discord webhook connection"""
+    try:
+        from discord_integration import test_webhook
+        
+        logger.info("🧪 Testing Discord webhook...")
+        success = test_webhook()
+        
+        if success:
+            logger.info("✅ Discord webhook test successful!")
+            return jsonify({
+                'success': True, 
+                'message': 'Discord webhook test successful! Check your Discord channel.'
+            })
+        else:
+            logger.error("❌ Discord webhook test failed!")
+            return jsonify({
+                'success': False, 
+                'error': 'Discord webhook test failed. Check your webhook URL and server permissions.'
+            })
+            
+    except Exception as e:
+        logger.error(f"❌ Discord test error: {e}")
+        return jsonify({
+            'success': False, 
+            'error': f'Discord test error: {str(e)}'
+        })
 
 @app.route('/health')
 def health_check():
