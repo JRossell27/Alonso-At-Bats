@@ -14,4 +14,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["python", "alonso_tracker.py"] 
+CMD ["python", "mets_dashboard.py"] 

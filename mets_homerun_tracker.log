@@ -1,0 +1,41 @@
+2025-06-18 10:42:16,008 - INFO - 🚀 Starting Mets Home Run Tracker Tests
+2025-06-18 10:42:16,008 - INFO - ==================================================
+2025-06-18 10:42:16,008 - INFO - 
+📝 Running Basic Functionality test...
+2025-06-18 10:42:16,008 - INFO - 🧪 Testing basic Mets HR Tracker functionality...
+2025-06-18 10:42:16,009 - INFO - 🏠 No existing queue file, starting fresh
+2025-06-18 10:42:16,009 - INFO - ✅ Tracker initialized successfully
+2025-06-18 10:42:16,302 - INFO - 📊 Found 0 active/recent Mets games
+2025-06-18 10:42:16,303 - INFO - ✅ Found 0 Mets games
+2025-06-18 10:42:16,303 - INFO - ✅ Status: {'monitoring': False, 'processing_gifs': False, 'uptime': None, 'last_check': None, 'queue_size': 0, 'processed_plays': 0, 'stats': {'homeruns_posted_today': 0, 'gifs_created_today': 0, 'homeruns_queued_today': 0}}
+2025-06-18 10:42:16,303 - INFO - ✅ PASSED - Basic Functionality (0.30s)
+2025-06-18 10:42:16,303 - INFO - 
+📝 Running GIF Integration test...
+2025-06-18 10:42:16,304 - INFO - 🎬 Testing GIF integration...
+2025-06-18 10:42:16,304 - INFO - ✅ GIF integration initialized
+2025-06-18 10:42:16,304 - INFO - ✅ PASSED - GIF Integration (0.00s)
+2025-06-18 10:42:16,304 - INFO - 
+📝 Running Discord Integration test...
+2025-06-18 10:42:16,304 - INFO - 📱 Testing Discord integration...
+2025-06-18 10:42:16,304 - INFO - ✅ Discord integration imported
+2025-06-18 10:42:16,304 - WARNING - ⚠️ Discord webhook URL not configured
+2025-06-18 10:42:16,304 - INFO - ✅ PASSED - Discord Integration (0.00s)
+2025-06-18 10:42:16,304 - INFO - 
+📝 Running Monitoring Cycle test...
+2025-06-18 10:42:16,304 - INFO - 🔄 Testing monitoring cycle...
+2025-06-18 10:42:16,304 - INFO - 🏠 No existing queue file, starting fresh
+2025-06-18 10:42:16,442 - INFO - 📊 Found 0 active/recent Mets games
+2025-06-18 10:42:16,443 - INFO - Found 0 Mets games to monitor
+2025-06-18 10:42:16,443 - INFO - ✅ Monitoring cycle test completed
+2025-06-18 10:42:16,443 - INFO - ✅ PASSED - Monitoring Cycle (0.14s)
+2025-06-18 10:42:16,443 - INFO - 
+==================================================
+2025-06-18 10:42:16,444 - INFO - 📊 TEST SUMMARY
+2025-06-18 10:42:16,444 - INFO - ==================================================
+2025-06-18 10:42:16,444 - INFO - ✅ PASS Basic Functionality (0.30s)
+2025-06-18 10:42:16,444 - INFO - ✅ PASS GIF Integration (0.00s)
+2025-06-18 10:42:16,444 - INFO - ✅ PASS Discord Integration (0.00s)
+2025-06-18 10:42:16,444 - INFO - ✅ PASS Monitoring Cycle (0.14s)
+2025-06-18 10:42:16,444 - INFO - --------------------------------------------------
+2025-06-18 10:42:16,444 - INFO - OVERALL: 4/4 tests passed
+2025-06-18 10:42:16,444 - INFO - 🎉 ALL TESTS PASSED! Mets HR Tracker is ready!
