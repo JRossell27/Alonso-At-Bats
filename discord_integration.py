@@ -65,8 +65,14 @@ class DiscordPoster:
             logger.error(f"Error posting message with GIF: {e}")
             return False
 
-# Global instance for easy importing
-discord_poster = DiscordPoster()
+def get_discord_poster() -> Optional[DiscordPoster]:
+    """Get a Discord poster instance with webhook URL from environment"""
+    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+    if not webhook_url:
+        logger.error("DISCORD_WEBHOOK_URL environment variable not set")
+        return None
+    
+    return DiscordPoster(webhook_url)
 
 def post_home_run(player_name: str, description: str, stats: Dict[str, Any], gif_path: Optional[str] = None) -> bool:
     """
@@ -82,6 +88,12 @@ def post_home_run(player_name: str, description: str, stats: Dict[str, Any], gif
         bool: True if posted successfully
     """
     try:
+        # Get Discord poster instance
+        discord_poster = get_discord_poster()
+        if not discord_poster:
+            logger.error("Cannot post to Discord: webhook URL not configured")
+            return False
+        
         # Create message content
         message_content = f"🏠⚾ **{player_name}** goes yard! ⚾🏠\n\n"
         message_content += f"{description}\n"
@@ -114,6 +126,11 @@ def post_home_run(player_name: str, description: str, stats: Dict[str, Any], gif
 def test_webhook() -> bool:
     """Test the Discord webhook connection"""
     try:
+        discord_poster = get_discord_poster()
+        if not discord_poster:
+            logger.error("Cannot test webhook: URL not configured")
+            return False
+            
         test_message = "🧪 Mets Home Run Tracker test message #LGM"
         return discord_poster.post_message(test_message)
     except Exception as e:
