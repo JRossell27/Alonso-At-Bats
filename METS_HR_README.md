@@ -1,332 +1,173 @@
-# 🏠⚾ Mets Home Run Tracker
+# 🏟️ New York Mets Home Run Tracker
 
-**Real-time monitoring and Discord posting of every New York Mets home run with GIF generation**
+A specialized MLB tracking system that monitors **every single New York Mets home run** in real-time, automatically generating GIFs and posting to Discord with detailed statistics.
 
-## Overview
+## 🎯 Features
 
-The Mets Home Run Tracker is a comprehensive system that monitors live MLB games in real-time to detect every New York Mets home run, creates GIFs of the plays using Baseball Savant integration, and posts them to Discord with enhanced Statcast data.
+- **Real-time Monitoring**: Checks for Mets games every 2 minutes
+- **All Home Runs**: Captures every Mets HR regardless of impact (no WPA filtering)
+- **Automatic GIF Creation**: Generates highlight GIFs via Baseball Savant integration
+- **Discord Integration**: Posts formatted messages with stats and GIFs
+- **Keep-alive System**: Prevents deployment sleeping with continuous pings
+- **Web Dashboard**: Beautiful Mets-themed interface for monitoring and control
+- **Comprehensive Logging**: Detailed tracking of all system activities
 
-### Key Features
+## 🛠️ Setup Instructions
 
-- 🎯 **Comprehensive Coverage**: Tracks ALL Mets home runs (no WPA filtering)
-- 🎬 **Automatic GIF Creation**: Generates GIFs using Baseball Savant integration
-- 📱 **Discord Integration**: Posts to Discord with formatted messages
-- 📊 **Enhanced Stats**: Includes exit velocity, launch angle, and distance
-- 🖥️ **Web Dashboard**: Beautiful Mets-themed monitoring interface
-- ☁️ **Cloud Ready**: Optimized for Render.com deployment
+### 1. Environment Variables
 
-## System Architecture
+Set these environment variables in your deployment platform (Render, Heroku, etc.):
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   MLB API       │    │   Baseball       │    │   Discord       │
-│   Live Games    │────│   Savant GIFs    │────│   Webhook       │
-│   & Play Data   │    │   & Statcast     │    │   Posting       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                 Mets Home Run Tracker                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
-│  │   Monitor   │  │ GIF Queue   │  │    Web Dashboard        │ │
-│  │   Games     │──│ Processing  │──│    (Flask)              │ │
-│  │   (2 min)   │  │ (5 min)     │  │                         │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+DISCORD_WEBHOOK_URL=your_discord_webhook_url_here
 ```
 
-## Installation & Setup
+To get a Discord webhook URL:
+1. Go to your Discord server settings
+2. Navigate to Integrations → Webhooks
+3. Create a new webhook or use an existing one
+4. Copy the webhook URL and set it as the DISCORD_WEBHOOK_URL environment variable
 
-### Prerequisites
+**Note**: Never commit webhook URLs to your code repository for security reasons.
 
-- Python 3.8+
-- Required packages (see `requirements.txt`)
+### 2. Local Development (Optional)
 
-### Local Development
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/JRossell27/Mets_HRs.git
-   cd Mets_HRs
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Run the tracker**:
-   ```bash
-   python mets_homerun_tracker.py
-   ```
-
-4. **Run the dashboard** (optional, in separate terminal):
-   ```bash
-   python mets_dashboard.py
-   ```
-
-### Discord Webhook Configuration
-
-The system is pre-configured with the Discord webhook:
-```
-https://discord.com/api/webhooks/1384903371198038167/wpSac_BDyX4fNTQq4d9fWV31QtZlmCKkzcMhVZpWJF9ZtJLJY4tMZ2L_x9Kn7McGOIKB
-```
-
-To change the webhook, edit the `discord_webhook` variable in `mets_homerun_tracker.py`.
-
-## Usage
-
-### Running the Tracker
-
-The tracker operates in continuous monitoring mode:
-
+If running locally, create a `.env` file:
 ```bash
-python mets_homerun_tracker.py
+DISCORD_WEBHOOK_URL=your_discord_webhook_url_here
 ```
 
-**What it does:**
-- Checks for live Mets games every 2 minutes
-- Detects ALL Mets home runs (no impact filtering)
-- Queues home runs for GIF processing
-- Posts to Discord with enhanced stats
+### 3. Installation
 
-### Web Dashboard
+1. Clone the repository
+2. Install dependencies: `pip install -r requirements.txt`
+3. Set environment variables
+4. Run: `python mets_homerun_tracker.py`
 
-Access the dashboard at `http://localhost:5000` when running locally.
+## 🚀 Deployment on Render
 
-**Dashboard Features:**
-- Real-time system status
-- Start/stop monitoring controls
-- Home run statistics
-- Mets orange/blue theming
-- Auto-refresh every 30 seconds
+1. **Connect Repository**: Link your GitHub repository to Render
+2. **Set Environment Variables**: 
+   - Go to your service settings
+   - Add `DISCORD_WEBHOOK_URL` with your webhook URL
+3. **Deploy**: The system will automatically start monitoring
 
-### Testing
+### Render Configuration:
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `python mets_homerun_tracker.py`
+- **Environment**: Python 3.9+
 
-Run the comprehensive test suite:
+## 📊 Dashboard
 
-```bash
-# Unit tests
-python test_mets_tracker.py
+Access the web dashboard at your deployment URL to:
+- View real-time system status
+- Monitor today's home run statistics
+- Start/stop the tracking system
+- View recent activity logs
 
-# System integration test
-python test_mets_tracker.py --system-test
+## 🎮 Discord Integration
+
+When a Mets player hits a home run, the bot posts a message in this format:
+```
+[Player Name] goes yard! [Description] [Exit Velocity/Launch Angle stats] #LGM
 ```
 
-## Discord Message Format
-
-The system posts home runs with this format:
-
+Example:
 ```
-🏠⚾ **Pete Alonso** goes yard! ⚾🏠
-
-Pete Alonso homers (15) on a fly ball to left center field.
-Exit Velocity: 108.2 mph | Launch Angle: 27° | Distance: 425 ft
-
-#LGM
+Pete Alonso goes yard! 441-foot blast to center field! 108.2 mph exit velocity, 28° launch angle #LGM
 ```
 
-## Technical Details
+## 🏗️ System Architecture
 
-### Core Components
+### Core Components:
 
-#### 1. MetsHomeRunTracker (`mets_homerun_tracker.py`)
-- **Purpose**: Main monitoring and coordination
-- **Key Features**:
-  - Mets team ID filtering (121)
-  - 2-minute monitoring cycles
-  - Queue management with rate limiting
-  - Baseball Savant Statcast integration
+1. **mets_homerun_tracker.py**: Main tracking system
+   - Monitors Mets games (Team ID: 121)
+   - Detects home runs from game feeds
+   - Manages GIF generation queue
+   - Handles Discord posting
 
-#### 2. Discord Integration (`discord_integration.py`)
-- **Purpose**: Discord webhook posting
-- **Features**:
-  - Message formatting with Statcast data
-  - GIF attachment support
-  - Error handling and retry logic
+2. **baseball_savant_gif_integration.py**: GIF creation
+   - Interfaces with Baseball Savant
+   - Downloads and processes highlight videos
+   - Converts to GIF format
 
-#### 3. Web Dashboard (`mets_dashboard.py`)
-- **Purpose**: Web interface for monitoring
-- **Features**:
-  - Mets-themed UI (orange/blue)
-  - Real-time status updates
-  - Start/stop controls
-  - Keep-alive system
+3. **discord_integration.py**: Discord posting
+   - Formats messages with player stats
+   - Uploads GIFs to Discord
+   - Handles API rate limiting
 
-#### 4. Baseball Savant Integration (`baseball_savant_gif_integration.py`)
-- **Purpose**: GIF creation and Statcast data
-- **Features**:
-  - Play matching and GIF generation
-  - Enhanced metrics extraction
-  - Rate limiting and retry logic
+4. **mets_dashboard.py**: Web interface
+   - Real-time system monitoring
+   - Mets-themed UI (orange/blue)
+   - Control panel for system management
 
-### Data Flow
-
-1. **Game Detection**: Monitor live Mets games via MLB API
-2. **Play Analysis**: Check each play for Mets home runs
-3. **Queue Management**: Add home runs to processing queue
-4. **GIF Creation**: Generate GIFs using Baseball Savant
-5. **Statcast Enhancement**: Extract exit velocity, launch angle, distance
-6. **Discord Posting**: Post formatted message with GIF
-
-### Monitoring Cycle
-
-```
-Every 2 minutes:
-├── Get live Mets games
-├── For each game:
-│   ├── Get all plays
-│   ├── Check for Mets home runs
-│   └── Queue new home runs
-├── Process GIF queue (with 5-minute rate limiting)
-└── Keep-alive ping
-```
-
-### Memory Management
-
-- **Queue Size**: Limited to 20 items
-- **Processed Plays**: Limited to 200 items
-- **GIF Cleanup**: Files deleted after posting
-- **Log Rotation**: Automatic log management
-
-## Deployment
-
-### Render.com Deployment
-
-The system is optimized for Render.com with:
-
-- `render.yaml`: Service configuration
-- `startup.sh`: Launch script
-- `Dockerfile`: Container configuration
-- `requirements.txt`: Python dependencies
-
-**Environment Variables:**
-- `PORT`: Set automatically by Render
-- `KEEP_ALIVE_URL`: Auto-configured for dashboard
-
-### Deployment Files
-
-- **render.yaml**: Render service configuration
-- **startup.sh**: Startup script for deployment
-- **Dockerfile**: Container configuration
-- **requirements.txt**: Python package dependencies
-
-## Configuration
-
-### Key Settings
-
-```python
-# Mets team ID (do not change)
-mets_team_id = 121
-
-# Monitoring interval (seconds)
-monitoring_interval = 120  # 2 minutes
-
-# GIF processing rate limit
-gif_rate_limit = 300  # 5 minutes between attempts
-
-# Queue management
-max_queue_size = 20
-max_attempts = 5
-```
-
-### Discord Webhook
-
-To change the Discord webhook, update the URL in `discord_integration.py`:
-
-```python
-self.webhook_url = "your_new_webhook_url_here"
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **No home runs detected**:
-   - Verify Mets are playing (check MLB schedule)
-   - Check team ID filtering (121 for Mets)
-
-2. **GIF creation failing**:
-   - Baseball Savant rate limiting
-   - Play data matching issues
-   - Network connectivity
-
-3. **Discord posting errors**:
-   - Invalid webhook URL
-   - Message size limits
-   - Network issues
-
-### Logging
+## 📈 Monitoring
 
 The system provides comprehensive logging:
+- System uptime and health
+- Home runs detected and posted
+- API call statistics
+- Error tracking and recovery
+- Queue management status
 
-```bash
-tail -f mets_homerun_tracker.log
-```
+## 🔧 Key Features
 
-**Log Levels:**
-- `INFO`: Normal operations
-- `WARNING`: Minor issues
-- `ERROR`: Serious problems
+### Real-time Detection
+- Monitors all Mets games simultaneously
+- 2-minute check intervals for optimal performance
+- Immediate detection when games go live
 
-### Debug Mode
+### Smart Processing
+- Duplicate detection prevents repeat posts
+- Queue management for reliable GIF creation
+- Retry logic for failed operations
+- Automatic cleanup of old data
 
-Enable verbose logging by setting log level to DEBUG:
+### Robust Architecture
+- Keep-alive pings prevent deployment sleeping
+- Error handling and recovery
+- Rate limiting compliance
+- Memory efficient processing
 
-```python
-logging.basicConfig(level=logging.DEBUG)
-```
+## 🎯 Mets-Specific Filtering
 
-## Development
+Unlike general MLB trackers, this system:
+- Only monitors New York Mets games (Team ID: 121)
+- Captures ALL Mets home runs (no impact filtering)
+- Uses Mets branding and colors
+- Includes #LGM hashtag for team pride
 
-### Adding Features
+## 📱 Usage
 
-1. **New Discord Format**: Modify `post_to_discord()` in `mets_homerun_tracker.py`
-2. **Additional Stats**: Enhance `get_enhanced_statcast_data()`
-3. **Dashboard Features**: Add endpoints to `mets_dashboard.py`
+Once deployed, the system runs automatically:
 
-### Testing Changes
+1. **Automatic Start**: Begins monitoring when deployed
+2. **Game Detection**: Finds scheduled/live Mets games
+3. **HR Monitoring**: Checks for new home runs every 2 minutes
+4. **GIF Creation**: Generates highlights for each home run
+5. **Discord Posting**: Shares formatted messages with stats
+6. **Keep-alive**: Maintains continuous operation
 
-Always run tests before deploying:
+## 🐛 Troubleshooting
 
-```bash
-python test_mets_tracker.py --system-test
-```
+### Common Issues:
 
-### Code Structure
+1. **No Discord Posts**: Check DISCORD_WEBHOOK_URL environment variable
+2. **System Sleeping**: Ensure keep-alive pings are working
+3. **Missing GIFs**: Baseball Savant may have delays
+4. **API Errors**: Check logs for rate limiting or connectivity issues
 
-```
-mets_homerun_tracker.py    # Main tracker logic
-├── MetsHomeRun           # Data structure
-├── MetsHomeRunTracker    # Main class
-└── monitoring loop       # Continuous operation
+### Log Messages:
+- `🔄 Starting monitoring cycle`: Normal operation
+- `🎯 Found X Mets game(s)`: Games detected
+- `⚾ NEW HOME RUN DETECTED`: Success!
+- `💓 Keep-alive ping`: System health check
 
-discord_integration.py     # Discord posting
-├── DiscordPoster         # Main class
-└── post_home_run()       # Helper function
+## 📄 License
 
-mets_dashboard.py          # Web interface
-├── Flask routes          # API endpoints
-└── HTML template         # Dashboard UI
-
-baseball_savant_gif_integration.py  # GIF creation
-└── BaseballSavantGifGenerator      # Main class
-```
-
-## License
-
-This project is for personal use and educational purposes.
-
-## Support
-
-For issues or questions:
-1. Check the logs for error messages
-2. Run the system test: `python test_mets_tracker.py --system-test`
-3. Verify Discord webhook connectivity
-4. Check Render deployment logs
+This project is for educational and personal use. MLB data is property of Major League Baseball.
 
 ---
 
-**Let's Go Mets! #LGM 🧡💙**
-
-*Made with ❤️ for the best fans in baseball* 
+**Let's Go Mets! 🧡💙 #LGM** 

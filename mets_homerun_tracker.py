@@ -60,8 +60,11 @@ class MetsHomeRunTracker:
         self.consecutive_errors = 0
         self.max_consecutive_errors = 5
         
-        # Discord webhook URL
-        self.discord_webhook = "https://discord.com/api/webhooks/1384903371198038167/wpSac_BDyX4fNTQq4d9fWV31QtZlmCKkzcMhVZpWJF9ZtJLJY4tMZ2L_x9Kn7McGOIKB"
+        # Discord integration
+        self.discord_webhook = os.getenv('DISCORD_WEBHOOK_URL')
+        if not self.discord_webhook:
+            logger.error("❌ DISCORD_WEBHOOK_URL environment variable not set!")
+            raise ValueError("DISCORD_WEBHOOK_URL environment variable is required")
         
         # Initialize GIF generator
         try:
@@ -355,7 +358,7 @@ class MetsHomeRunTracker:
                             logger.error(f"❌ Error creating GIF: {e}")
                     
                     # Post to Discord
-                    logger.info(f"�� Posting {home_run.player_name} HR to Discord...")
+                    logger.info(f"🎉 Posting {home_run.player_name} HR to Discord...")
                     stats_dict = {
                         'exit_velocity': home_run.exit_velocity,
                         'launch_angle': home_run.launch_angle,

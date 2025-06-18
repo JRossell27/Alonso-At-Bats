@@ -14,8 +14,11 @@ logger = logging.getLogger(__name__)
 class DiscordPoster:
     """Handles Discord webhook posting for Mets home runs"""
     
-    def __init__(self, webhook_url: Optional[str] = None):
-        self.webhook_url = webhook_url or "https://discord.com/api/webhooks/1384903371198038167/wpSac_BDyX4fNTQq4d9fWV31QtZlmCKkzcMhVZpWJF9ZtJLJY4tMZ2L_x9Kn7McGOIKB"
+    def __init__(self, webhook_url=None):
+        """Initialize Discord integration with webhook URL."""
+        self.webhook_url = webhook_url
+        if not self.webhook_url:
+            raise ValueError("Discord webhook URL is required")
         
     def post_message(self, content: str, embeds: Optional[list] = None) -> bool:
         """Post a message to Discord"""
