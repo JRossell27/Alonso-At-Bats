@@ -11,6 +11,7 @@ import gc  # For garbage collection
 from flask import Flask, render_template
 import threading
 from pathlib import Path
+import json
 
 # Import our GIF integration module
 try:
@@ -76,6 +77,70 @@ if not TEST_MODE:
 processed_at_bats = set()
 tweet_gif_queue = []  # Store (tweet_id, play_data) for GIF processing
 
+# Persistence file for processed at-bats
+PROCESSED_AT_BATS_FILE = "processed_at_bats.json"
+
+def load_processed_at_bats():
+    """Load processed at-bats from file to prevent duplicates after restart"""
+    global processed_at_bats
+    try:
+        if Path(PROCESSED_AT_BATS_FILE).exists():
+            with open(PROCESSED_AT_BATS_FILE, 'r') as f:
+                data = json.load(f)
+                processed_at_bats = set(data.get('at_bats', []))
+                logger.info(f"Loaded {len(processed_at_bats)} processed at-bats from file")
+        else:
+            logger.info("No processed at-bats file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading processed at-bats: {str(e)}")
+        processed_at_bats = set()
+
+def save_processed_at_bats():
+    """Save processed at-bats to file for persistence"""
+    try:
+        data = {
+            'at_bats': list(processed_at_bats),
+            'last_updated': datetime.now().isoformat(),
+            'count': len(processed_at_bats)
+        }
+        with open(PROCESSED_AT_BATS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.debug(f"Saved {len(processed_at_bats)} processed at-bats to file")
+    except Exception as e:
+        logger.error(f"Error saving processed at-bats: {str(e)}")
+
+def cleanup_old_at_bats():
+    """Remove at-bats older than 7 days to prevent memory bloat"""
+    global processed_at_bats
+    try:
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        old_at_bats = []
+        
+        for at_bat_id in processed_at_bats:
+            # Extract date from at_bat_id (format: game_id_inning_play_id_date)
+            parts = at_bat_id.split('_')
+            if len(parts) >= 4:
+                at_bat_date = parts[-1]  # Last part should be the date
+                try:
+                    at_bat_datetime = datetime.strptime(at_bat_date, '%Y-%m-%d')
+                    days_old = (datetime.now() - at_bat_datetime).days
+                    if days_old > 7:
+                        old_at_bats.append(at_bat_id)
+                except ValueError:
+                    # If date parsing fails, keep the at-bat to be safe
+                    continue
+        
+        # Remove old at-bats
+        for old_at_bat in old_at_bats:
+            processed_at_bats.discard(old_at_bat)
+        
+        if old_at_bats:
+            logger.info(f"Cleaned up {len(old_at_bats)} old at-bats (>7 days)")
+            save_processed_at_bats()
+            
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}")
+
 # Track last check time and status
 last_check_time = None
 last_check_status = "Initializing..."
@@ -95,15 +160,136 @@ def get_alonso_id():
     """Get Pete Alonso's MLB ID (hardcoded for reliability)"""
     return ALONSO_MLB_ID
 
-def get_current_game():
-    """Get the current game ID if Alonso is playing"""
-    url = "https://statsapi.mlb.com/api/v1/schedule"
-    params = {
-        "sportId": 1,
-        "date": datetime.now().strftime("%m/%d/%Y")
-    }
-    response = requests.get(url, params=params)
-    return response.json()
+def get_current_games():
+    """Get all current games for today with live data"""
+    try:
+        url = "https://statsapi.mlb.com/api/v1/schedule"
+        params = {
+            "sportId": 1,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "hydrate": "game(content(editorial(recap))),linescore,team,probablePitcher,decisions"
+        }
+        response = requests.get(url, params=params, timeout=10)
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error fetching current games: {str(e)}")
+        return {}
+
+def get_live_game_data(game_id):
+    """Get live play-by-play data for a specific game"""
+    try:
+        url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
+        response = requests.get(url, timeout=15)
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error fetching live game data for {game_id}: {str(e)}")
+        return {}
+
+def find_alonso_games_today():
+    """Find games where Pete Alonso is playing today"""
+    games_data = get_current_games()
+    alonso_games = []
+    
+    if not games_data.get('dates'):
+        return alonso_games
+    
+    for date_data in games_data['dates']:
+        for game in date_data.get('games', []):
+            game_id = game.get('gamePk')
+            if not game_id:
+                continue
+                
+            # Check if Mets are playing (Pete Alonso's team)
+            home_team = game.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', '')
+            away_team = game.get('teams', {}).get('away', {}).get('team', {}).get('abbreviation', '')
+            
+            if 'NYM' in [home_team, away_team]:
+                alonso_games.append({
+                    'game_id': game_id,
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'game_state': game.get('status', {}).get('detailedState', ''),
+                    'inning': game.get('linescore', {}).get('currentInning', 1),
+                    'inning_state': game.get('linescore', {}).get('inningState', ''),
+                    'is_live': game.get('status', {}).get('statusCode') in ['I', 'IR', 'IH']  # In progress states
+                })
+                logger.info(f"Found Mets game: {away_team} @ {home_team} (Game ID: {game_id}, State: {game.get('status', {}).get('detailedState', '')})")
+    
+    return alonso_games
+
+def extract_alonso_at_bats_from_live_data(live_data):
+    """Extract Pete Alonso's at-bats from live game data"""
+    at_bats = []
+    
+    if not live_data.get('liveData', {}).get('plays', {}).get('allPlays'):
+        return at_bats
+    
+    all_plays = live_data['liveData']['plays']['allPlays']
+    
+    for play in all_plays:
+        # Check if Pete Alonso is the batter
+        batter_id = play.get('matchup', {}).get('batter', {}).get('id')
+        if batter_id == ALONSO_MLB_ID:
+            # Extract detailed play information
+            play_id = play.get('atBatIndex', 0)
+            inning = play.get('about', {}).get('inning', 1)
+            game_id = live_data.get('gamePk', 0)
+            
+            # Create unique ID for this at-bat
+            at_bat_id = f"{game_id}_{inning}_{play_id}_{datetime.now().strftime('%Y-%m-%d')}"
+            
+            # Extract result and hit data
+            result = play.get('result', {})
+            hit_data = play.get('hitData', {})
+            pitch_data = play.get('pitchData', {}) if play.get('pitchData') else {}
+            
+            # Get the last pitch for strikeout data
+            last_pitch = None
+            if play.get('playEvents'):
+                for event in reversed(play['playEvents']):
+                    if event.get('isPitch') and event.get('details'):
+                        last_pitch = event
+                        break
+            
+            at_bat_data = {
+                'at_bat_id': at_bat_id,
+                'game_id': game_id,
+                'play_id': play_id,
+                'inning': inning,
+                'inning_half': play.get('about', {}).get('halfInning', 'top'),
+                'description': result.get('description', 'Unknown'),
+                'event': result.get('event', 'Unknown'),
+                'rbi': result.get('rbi', 0),
+                'runners_on_base': len(play.get('runners', [])),
+                'outs': play.get('count', {}).get('outs', 0),
+                'balls': play.get('count', {}).get('balls', 0),
+                'strikes': play.get('count', {}).get('strikes', 0),
+                'hit_data': {
+                    'launch_speed': hit_data.get('launchSpeed'),
+                    'launch_angle': hit_data.get('launchAngle'),
+                    'total_distance': hit_data.get('totalDistance'),
+                    'trajectory': hit_data.get('trajectory'),
+                    'hardness': hit_data.get('hardness'),
+                    'location': hit_data.get('location'),
+                    'coord_x': hit_data.get('coordinates', {}).get('coordX'),
+                    'coord_y': hit_data.get('coordinates', {}).get('coordY')
+                },
+                'pitch_data': {
+                    'start_speed': last_pitch.get('pitchData', {}).get('startSpeed') if last_pitch else None,
+                    'pitch_type': last_pitch.get('details', {}).get('type', {}).get('description') if last_pitch else None,
+                    'zone': last_pitch.get('pitchData', {}).get('zone') if last_pitch else None
+                },
+                'game_situation': {
+                    'home_score': live_data.get('liveData', {}).get('linescore', {}).get('teams', {}).get('home', {}).get('runs', 0),
+                    'away_score': live_data.get('liveData', {}).get('linescore', {}).get('teams', {}).get('away', {}).get('runs', 0),
+                    'inning_state': live_data.get('liveData', {}).get('linescore', {}).get('inningState', '')
+                },
+                'timestamp': datetime.now()
+            }
+            
+            at_bats.append(at_bat_data)
+    
+    return at_bats
 
 def get_alonso_season_stats():
     """Get Alonso's comprehensive season stats with caching"""
@@ -319,11 +505,20 @@ def format_tweet(play_data):
     return tweet
 
 def keep_alive():
-    """Send a request to keep the service alive"""
+    """Enhanced keep-alive mechanism with better error handling"""
     try:
-        requests.get("https://alonso-at-bat-tracker.onrender.com/")
-    except:
-        pass
+        # Try to ping our own service
+        response = requests.get("https://alonso-at-bat-tracker.onrender.com/", timeout=5)
+        if response.status_code == 200:
+            logger.debug("Keep-alive ping successful")
+        else:
+            logger.warning(f"Keep-alive ping returned status {response.status_code}")
+    except requests.exceptions.Timeout:
+        logger.warning("Keep-alive ping timed out")
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Keep-alive ping failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in keep-alive: {str(e)}")
 
 def send_deployment_test_tweet():
     """Send a one-time test tweet on deployment"""
@@ -425,6 +620,9 @@ def post_tweet_with_gif_followup(tweet_text, play_data, game_data=None):
                 })
                 logger.info(f"Queued for GIF follow-up: {tweet_id}")
             
+            # Save processed at-bats after successful tweet
+            save_processed_at_bats()
+            
             return tweet_id
         else:
             logger.info(f"TEST MODE - Would tweet: {tweet_text}")
@@ -438,6 +636,9 @@ def post_tweet_with_gif_followup(tweet_text, play_data, game_data=None):
                     'timestamp': datetime.now()
                 })
                 logger.info(f"TEST MODE - Queued for GIF follow-up: {fake_tweet_id}")
+            
+            # Save processed at-bats even in test mode
+            save_processed_at_bats()
             return None
             
     except Exception as e:
@@ -609,15 +810,14 @@ def process_gif_queue():
             time.sleep(60)
 
 def check_alonso_at_bats():
-    """Check for Alonso's at-bats and tweet if found"""
+    """Enhanced at-bat checking with live game data"""
     global last_check_time, last_check_status
     
     try:
-        alonso_id = get_alonso_id()
-        logger.info("Checking for Alonso at-bats...")
+        logger.info("🔍 Checking for Pete Alonso at-bats...")
         
         if TEST_MODE:
-            # Generate test at-bat with enhanced data
+            # Keep existing test mode logic
             test_at_bat = generate_test_at_bat()
             at_bat_id = f"{test_at_bat['game_date']}_{test_at_bat['inning']}_{test_at_bat['at_bat_number']}"
             
@@ -671,175 +871,361 @@ def check_alonso_at_bats():
                 logger.info(f"At-bat already processed (ID: {at_bat_id}). Skipping...")
                 last_check_status = f"Duplicate at-bat skipped: {test_at_bat['description']}"
         else:
-            # Get current game data
-            game_data_response = get_current_game()
+            # Production mode - use live game data
+            alonso_games = find_alonso_games_today()
             
-            # Get Alonso's recent at-bats with enhanced data
-            url = f"https://statsapi.mlb.com/api/v1/people/{alonso_id}/stats"
-            params = {
-                "stats": "gameLog",
-                "season": datetime.now().year,
-                "group": "hitting"
-            }
-            response = requests.get(url, params=params)
-            recent_at_bats = response.json()
+            if not alonso_games:
+                last_check_status = "No Mets games found today"
+                logger.info("No Mets games scheduled for today")
+                return
             
-            # Also get live game data if available
-            live_game_url = "https://statsapi.mlb.com/api/v1/schedule"
-            live_params = {
-                "sportId": 1,
-                "date": datetime.now().strftime("%m/%d/%Y"),
-                "hydrate": "game(content(editorial(recap))),linescore,team"
-            }
-            live_response = requests.get(live_game_url, params=live_params)
-            live_data = live_response.json()
+            new_at_bats_found = 0
             
-            logger.info("Checking MLB API for recent at-bats...")
+            for game_info in alonso_games:
+                game_id = game_info['game_id']
+                logger.info(f"📊 Checking game {game_id}: {game_info['away_team']} @ {game_info['home_team']} ({game_info['game_state']})")
+                
+                # Get live game data
+                live_data = get_live_game_data(game_id)
+                if not live_data:
+                    logger.warning(f"Could not fetch live data for game {game_id}")
+                    continue
+                
+                # Extract Alonso's at-bats from this game
+                at_bats = extract_alonso_at_bats_from_live_data(live_data)
+                
+                for at_bat_data in at_bats:
+                    at_bat_id = at_bat_data['at_bat_id']
+                    
+                    if at_bat_id not in processed_at_bats:
+                        logger.info(f"🆕 NEW AT-BAT FOUND! {at_bat_data['event']} in inning {at_bat_data['inning']}")
+                        new_at_bats_found += 1
+                        
+                        # Convert to our play_data format
+                        play_data = {
+                            'type': 'home_run' if at_bat_data['event'] == 'Home Run' else 'other',
+                            'description': at_bat_data['event'],
+                            'exit_velocity': at_bat_data['hit_data']['launch_speed'],
+                            'launch_angle': at_bat_data['hit_data']['launch_angle'],
+                            'distance': at_bat_data['hit_data']['total_distance'],
+                            'hit_distance': at_bat_data['hit_data']['total_distance'],
+                            'trajectory': at_bat_data['hit_data']['trajectory'],
+                            'hardness': at_bat_data['hit_data']['hardness'],
+                            'situation': f"in the {at_bat_data['inning_half']} of the {at_bat_data['inning']}{'st' if at_bat_data['inning'] == 1 else 'nd' if at_bat_data['inning'] == 2 else 'rd' if at_bat_data['inning'] == 3 else 'th'}",
+                            'rbi_on_play': at_bat_data['rbi'],
+                            'play_id': at_bat_data['play_id'],
+                            'inning': at_bat_data['inning'],
+                            'runners_on_base': at_bat_data['runners_on_base'],
+                            'outs': at_bat_data['outs'],
+                            'count': f"{at_bat_data['balls']}-{at_bat_data['strikes']}",
+                            'game_situation': at_bat_data['game_situation']
+                        }
+                        
+                        # Add strikeout-specific data
+                        if at_bat_data['event'] == 'Strikeout':
+                            play_data.update({
+                                'strikeout_type': 'looking' if 'called' in at_bat_data['description'].lower() else 'swinging',
+                                'pitch_type': at_bat_data['pitch_data']['pitch_type'],
+                                'pitch_speed': at_bat_data['pitch_data']['start_speed'],
+                                'pitch_zone': at_bat_data['pitch_data']['zone']
+                            })
+                        
+                        # Game data for GIF creation
+                        game_data = {
+                            'game_id': game_id,
+                            'home_team': game_info['home_team'],
+                            'away_team': game_info['away_team']
+                        }
+                        
+                        # Format and post tweet
+                        tweet = format_tweet(play_data)
+                        tweet_id = post_tweet_with_gif_followup(tweet, play_data, game_data)
+                        
+                        # Mark as processed
+                        processed_at_bats.add(at_bat_id)
+                        
+                        logger.info(f"✅ At-bat processed and tweeted! Total processed: {len(processed_at_bats)}")
+                    else:
+                        logger.debug(f"At-bat {at_bat_id} already processed, skipping")
             
-            if recent_at_bats and 'stats' in recent_at_bats:
-                for game in recent_at_bats['stats']:
-                    if game.get('date') == datetime.now().strftime("%Y-%m-%d"):
-                        for at_bat in game.get('splits', []):
-                            at_bat_id = f"{game.get('date', 'unknown')}_{at_bat.get('inning', 1)}_{at_bat.get('atBatIndex', 1)}"
-                            
-                            if at_bat_id not in processed_at_bats:
-                                logger.info(f"New MLB at-bat found! Processing...")
-                                
-                                # Enhanced play data extraction
-                                result_event = at_bat.get('result', {}).get('event', 'Unknown')
-                                hit_data = at_bat.get('hitData', {})
-                                pitch_data = at_bat.get('pitchData', {})
-                                
-                                play_data = {
-                                    'type': 'home_run' if result_event == 'Home Run' else 'other',
-                                    'description': result_event,
-                                    'exit_velocity': hit_data.get('launchSpeed', 'N/A'),
-                                    'launch_angle': hit_data.get('launchAngle', 'N/A'),
-                                    'distance': hit_data.get('totalDistance', 'N/A'),
-                                    'hit_distance': hit_data.get('totalDistance', 'N/A'),
-                                    'xba': hit_data.get('xba', 'N/A'),
-                                    'barrel_classification': 'Barrel' if hit_data.get('isBarrel') else 'Hard Hit' if hit_data.get('launchSpeed', 0) > 95 else '',
-                                    'situation': get_situational_context(),  # Could be enhanced with real game situation
-                                    'rbi_on_play': at_bat.get('result', {}).get('rbi', 0),
-                                    'play_id': at_bat.get('atBatIndex', 1),
-                                    'inning': at_bat.get('inning', 1)
-                                }
-                                
-                                # Add strikeout data if it's a strikeout
-                                if result_event == 'Strikeout':
-                                    play_data.update({
-                                        'strikeout_type': 'looking' if 'called' in at_bat.get('result', {}).get('description', '').lower() else 'swinging',
-                                        'pitch_type': pitch_data.get('type', 'N/A'),
-                                        'pitch_speed': pitch_data.get('startSpeed', 'N/A'),
-                                        'pitch_location': f"Zone {pitch_data.get('zone', 'N/A')}" if pitch_data.get('zone') else 'N/A'
-                                    })
-                                
-                                # Extract game data for GIF creation
-                                game_data = None
-                                if live_data and 'dates' in live_data:
-                                    for date_data in live_data['dates']:
-                                        for live_game in date_data.get('games', []):
-                                            # Try to match with current game
-                                            game_data = {
-                                                'game_id': live_game.get('gamePk'),
-                                                'home_team': live_game.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', ''),
-                                                'away_team': live_game.get('teams', {}).get('away', {}).get('team', {}).get('abbreviation', '')
-                                            }
-                                            break
-                                
-                                tweet = format_tweet(play_data)
-                                
-                                # Post tweet with GIF follow-up
-                                tweet_id = post_tweet_with_gif_followup(tweet, play_data, game_data)
-                                
-                                processed_at_bats.add(at_bat_id)
-                                last_check_status = f"Found at-bat: {result_event} {play_data.get('situation', '')}"
-                                logger.info(f"MLB at-bat processed and tweeted. Total processed: {len(processed_at_bats)}")
-                            else:
-                                logger.info(f"MLB at-bat already processed (ID: {at_bat_id}). Skipping...")
+            if new_at_bats_found > 0:
+                last_check_status = f"Found {new_at_bats_found} new at-bat(s)"
+            else:
+                last_check_status = "No new at-bats found"
+                logger.info("No new at-bats found")
             
             # Clear memory after processing
             gc.collect()
-            
-            if not last_check_status.startswith("Found") and not last_check_status.startswith("Duplicate"):
-                last_check_status = "No new at-bats found"
-                logger.info("No new at-bats found in MLB API")
         
         last_check_time = datetime.now()
-        logger.info(f"Check completed. Status: {last_check_status}")
+        logger.info(f"✓ Check completed. Status: {last_check_status}")
         
     except Exception as e:
         error_msg = f"Error occurred: {str(e)}"
-        logger.error(error_msg)
+        logger.error(error_msg, exc_info=True)
         last_check_status = error_msg
 
 def background_checker():
-    """Background thread to check for Alonso's at-bats"""
+    """Enhanced background checker with more frequent monitoring and better keep-alive"""
+    logger.info("🚀 Starting enhanced background checker...")
+    check_count = 0
+    cleanup_count = 0
+    
     while True:
-        check_alonso_at_bats()
-        # Keep the service alive to prevent spin-down
-        keep_alive()
-        time.sleep(120)  # Wait 2 minutes between checks
+        try:
+            # Check for at-bats
+            check_alonso_at_bats()
+            check_count += 1
+            
+            # Keep alive every check (every 60 seconds)
+            keep_alive()
+            
+            # Cleanup old at-bats every 100 checks (~100 minutes)
+            cleanup_count += 1
+            if cleanup_count >= 100:
+                cleanup_old_at_bats()
+                cleanup_count = 0
+            
+            # Log status every 10 checks (10 minutes)
+            if check_count % 10 == 0:
+                logger.info(f"📈 Background checker running: {check_count} checks completed, {len(processed_at_bats)} at-bats processed")
+            
+            # Sleep for 60 seconds (more frequent checking)
+            time.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Error in background checker: {str(e)}", exc_info=True)
+            # Continue running even if there's an error
+            time.sleep(60)
 
 @app.route('/')
 def home():
-    """Render the home page with status information"""
+    """Render the home page with enhanced status information"""
     global last_check_time, last_check_status
     
     if last_check_time is None:
         status = "Initializing..."
+        time_since_check = "N/A"
     else:
-        status = f"Last check: {last_check_time.strftime('%Y-%m-%d %H:%M:%S')} - {last_check_status}"
+        status = f"Last check: {last_check_time.strftime('%Y-%m-%d %H:%M:%S')} UTC - {last_check_status}"
+        time_diff = datetime.now() - last_check_time
+        time_since_check = f"{int(time_diff.total_seconds())} seconds ago"
+    
+    # Get current season stats
+    season_stats = get_alonso_season_stats()
     
     return f"""
     <html>
         <head>
-            <title>Pete Alonso HR Tracker</title>
+            <title>Pete Alonso At-Bat Tracker</title>
+            <meta http-equiv="refresh" content="30">
             <style>
                 body {{
-                    font-family: Arial, sans-serif;
-                    max-width: 800px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    max-width: 1000px;
                     margin: 0 auto;
                     padding: 20px;
-                    background-color: #f5f5f5;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
                 }}
                 .container {{
                     background-color: white;
-                    padding: 20px;
-                    border-radius: 10px;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    padding: 30px;
+                    border-radius: 15px;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
                 }}
                 h1 {{
                     color: #002D72;
                     text-align: center;
+                    margin-bottom: 10px;
+                    font-size: 2.5em;
                 }}
-                .status {{
-                    margin-top: 20px;
-                    padding: 15px;
+                .subtitle {{
+                    text-align: center;
+                    color: #666;
+                    margin-bottom: 30px;
+                    font-style: italic;
+                }}
+                .status-grid {{
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 20px;
+                    margin-bottom: 30px;
+                }}
+                .status-card {{
+                    padding: 20px;
                     background-color: #f8f9fa;
-                    border-radius: 5px;
+                    border-radius: 10px;
                     border-left: 5px solid #002D72;
+                }}
+                .status-card h3 {{
+                    margin-top: 0;
+                    color: #002D72;
+                }}
+                .stats-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                    gap: 15px;
+                    margin-top: 20px;
+                }}
+                .stat-item {{
+                    text-align: center;
+                    padding: 15px;
+                    background-color: #e9ecef;
+                    border-radius: 8px;
+                }}
+                .stat-value {{
+                    font-size: 1.8em;
+                    font-weight: bold;
+                    color: #002D72;
+                }}
+                .stat-label {{
+                    font-size: 0.9em;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                .live-indicator {{
+                    display: inline-block;
+                    width: 12px;
+                    height: 12px;
+                    background-color: #28a745;
+                    border-radius: 50%;
+                    margin-right: 8px;
+                    animation: pulse 2s infinite;
+                }}
+                @keyframes pulse {{
+                    0% {{ opacity: 1; }}
+                    50% {{ opacity: 0.5; }}
+                    100% {{ opacity: 1; }}
+                }}
+                .footer {{
+                    text-align: center;
+                    margin-top: 30px;
+                    color: #666;
+                    font-size: 0.9em;
                 }}
             </style>
         </head>
         <body>
             <div class="container">
-                <h1>Pete Alonso HR Tracker</h1>
-                <div class="status">
-                    <p><strong>Status:</strong> {status}</p>
-                    <p><strong>Mode:</strong> {'TEST' if TEST_MODE else 'PRODUCTION'}</p>
+                <h1>⚾ Pete Alonso At-Bat Tracker</h1>
+                <div class="subtitle">Real-time monitoring with enhanced live game data</div>
+                
+                <div class="status-grid">
+                    <div class="status-card">
+                        <h3><span class="live-indicator"></span>System Status</h3>
+                        <p><strong>Mode:</strong> {'🧪 TEST' if TEST_MODE else '🚀 PRODUCTION'}</p>
+                        <p><strong>Status:</strong> {status}</p>
+                        <p><strong>Last Check:</strong> {time_since_check}</p>
+                        <p><strong>At-Bats Processed:</strong> {len(processed_at_bats)}</p>
+                        <p><strong>GIF Integration:</strong> {'✅ Available' if GIF_INTEGRATION_AVAILABLE else '❌ Not Available'}</p>
+                    </div>
+                    
+                    <div class="status-card">
+                        <h3>📊 Season Stats</h3>
+                        <p><strong>Average:</strong> {season_stats.get('avg', 'N/A')}</p>
+                        <p><strong>Home Runs:</strong> {season_stats.get('homeRuns', 'N/A')}</p>
+                        <p><strong>RBI:</strong> {season_stats.get('rbi', 'N/A')}</p>
+                        <p><strong>OPS:</strong> {season_stats.get('ops', 'N/A')}</p>
+                        <p><strong>At-Bats:</strong> {season_stats.get('atBats', 'N/A')}</p>
+                    </div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('homeRuns', 0)}</div>
+                        <div class="stat-label">Home Runs</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('rbi', 0)}</div>
+                        <div class="stat-label">RBI</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('avg', '.000')}</div>
+                        <div class="stat-label">Batting Average</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('ops', '.000')}</div>
+                        <div class="stat-label">OPS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('runs', 0)}</div>
+                        <div class="stat-label">Runs</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{season_stats.get('hits', 0)}</div>
+                        <div class="stat-label">Hits</div>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>🔄 Page auto-refreshes every 30 seconds</p>
+                    <p>⚡ Enhanced with live game data and improved monitoring</p>
+                    <p>🤖 Automated Pete Alonso at-bat tracking for the New York Mets</p>
                 </div>
             </div>
         </body>
     </html>
     """
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring services"""
+    global last_check_time, last_check_status
+    
+    # Determine health status
+    if last_check_time is None:
+        health_status = "starting"
+        is_healthy = True
+    else:
+        time_since_check = (datetime.now() - last_check_time).total_seconds()
+        if time_since_check > 300:  # More than 5 minutes
+            health_status = "stale"
+            is_healthy = False
+        elif "Error" in last_check_status:
+            health_status = "error"
+            is_healthy = False
+        else:
+            health_status = "healthy"
+            is_healthy = True
+    
+    response_data = {
+        "status": health_status,
+        "healthy": is_healthy,
+        "last_check": last_check_time.isoformat() if last_check_time else None,
+        "last_status": last_check_status,
+        "processed_at_bats": len(processed_at_bats),
+        "test_mode": TEST_MODE,
+        "gif_integration": GIF_INTEGRATION_AVAILABLE,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    status_code = 200 if is_healthy else 503
+    return response_data, status_code
+
+@app.route('/api/stats')
+def api_stats():
+    """API endpoint for current stats"""
+    season_stats = get_alonso_season_stats()
+    return {
+        "player": "Pete Alonso",
+        "mlb_id": ALONSO_MLB_ID,
+        "season_stats": season_stats,
+        "processed_at_bats": len(processed_at_bats),
+        "last_check": last_check_time.isoformat() if last_check_time else None,
+        "status": last_check_status
+    }
+
 if __name__ == "__main__":
-    logger.info("Starting Pete Alonso HR Tracker...")
+    logger.info("Starting Pete Alonso At-Bat Tracker...")
     logger.info(f"TEST_MODE: {TEST_MODE}")
     logger.info(f"DEPLOYMENT_TEST: {DEPLOYMENT_TEST}")
     logger.info(f"ALONSO_MLB_ID: {ALONSO_MLB_ID}")
     logger.info(f"GIF Integration: {'Available' if GIF_INTEGRATION_AVAILABLE else 'Not Available'}")
+    
+    # Load processed at-bats from file
+    logger.info("Loading processed at-bats from file...")
+    load_processed_at_bats()
     
     # Send deployment test tweet if enabled
     if DEPLOYMENT_TEST and not TEST_MODE:
@@ -854,17 +1240,36 @@ if __name__ == "__main__":
     # Start the GIF processing thread if available
     if GIF_INTEGRATION_AVAILABLE:
         logger.info("Starting GIF processing thread...")
-        gif_thread = threading.Thread(target=process_gif_queue, daemon=True)
-        gif_thread.start()
-        logger.info("GIF processing thread started")
+        try:
+            gif_thread = threading.Thread(target=process_gif_queue, daemon=True)
+            gif_thread.start()
+            logger.info("✅ GIF processing thread started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start GIF processing thread: {str(e)}")
     
     # Start the background checker thread
     logger.info("Starting background checker thread...")
-    checker_thread = threading.Thread(target=background_checker, daemon=True)
-    checker_thread.start()
-    logger.info("Background checker thread started")
+    try:
+        checker_thread = threading.Thread(target=background_checker, daemon=True)
+        checker_thread.start()
+        logger.info("✅ Background checker thread started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start background checker thread: {str(e)}")
+        # This is critical, so we should exit if we can't start the checker
+        exit(1)
     
     # Start the Flask app
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"Starting Flask app on port {port}...")
-    app.run(host='0.0.0.0', port=port) 
+    logger.info("🎯 Enhanced monitoring system active:")
+    logger.info("   • Live game data monitoring")
+    logger.info("   • 60-second check intervals")
+    logger.info("   • Persistent at-bat tracking")
+    logger.info("   • Enhanced keep-alive mechanism")
+    logger.info("   • Health check endpoints")
+    
+    try:
+        app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        logger.error(f"❌ Flask app failed to start: {str(e)}")
+        exit(1) 
