@@ -11,12 +11,26 @@ import os
 import requests
 from datetime import datetime
 from mets_homerun_tracker import MetsHomeRunTracker
+import logging
+
+# Configure enhanced logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('mets_dashboard.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Global tracker instance
+# Global tracker instance - auto-start on startup
 tracker = None
 tracker_thread = None
+auto_started = False
 
 # Dashboard HTML template with Mets colors
 DASHBOARD_HTML = '''
@@ -96,6 +110,7 @@ DASHBOARD_HTML = '''
         .controls {
             text-align: center;
             margin: 30px 0;
+            display: none; /* Hide controls since it's auto-running */
         }
         
         .btn {
@@ -213,6 +228,34 @@ DASHBOARD_HTML = '''
             border-top: 1px solid rgba(255, 255, 255, 0.2);
             color: #ccc;
         }
+        
+        .auto-status {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid #4CAF50;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .auto-status h3 {
+            color: #4CAF50;
+            margin: 0 0 10px 0;
+        }
+        
+        .logs-section {
+            margin-top: 30px;
+        }
+        
+        .log-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            border-left: 3px solid #ff5910;
+        }
     </style>
     <script>
         function refreshStatus() {
@@ -221,7 +264,7 @@ DASHBOARD_HTML = '''
                 .then(data => {
                     document.getElementById('monitoring-status').innerHTML = 
                         data.monitoring ? 
-                        '<span class="status-indicator status-active"></span>Active' : 
+                        '<span class="status-indicator status-active"></span>Active & Auto-Running' : 
                         '<span class="status-indicator status-inactive"></span>Stopped';
                     
                     document.getElementById('uptime').textContent = data.uptime || 'Not started';
@@ -230,8 +273,9 @@ DASHBOARD_HTML = '''
                     document.getElementById('hrs-posted').textContent = data.stats.homeruns_posted_today || 0;
                     document.getElementById('gifs-created').textContent = data.stats.gifs_created_today || 0;
                     document.getElementById('hrs-queued').textContent = data.stats.homeruns_queued_today || 0;
+                    document.getElementById('processed-plays').textContent = data.processed_plays || 0;
                     
-                    // Update button states
+                    // Update button states (hidden anyway)
                     document.getElementById('start-btn').disabled = data.monitoring;
                     document.getElementById('stop-btn').disabled = !data.monitoring;
                 })
@@ -239,6 +283,25 @@ DASHBOARD_HTML = '''
                     console.error('Error fetching status:', error);
                     document.getElementById('monitoring-status').innerHTML = 
                         '<span class="status-indicator status-inactive"></span>Error';
+                });
+        }
+        
+        function refreshLogs() {
+            fetch('/api/logs')
+                .then(response => response.json())
+                .then(data => {
+                    const logsContainer = document.getElementById('logs-container');
+                    logsContainer.innerHTML = '';
+                    
+                    data.logs.forEach(log => {
+                        const logDiv = document.createElement('div');
+                        logDiv.className = 'log-item';
+                        logDiv.textContent = log;
+                        logsContainer.appendChild(logDiv);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching logs:', error);
                 });
         }
         
@@ -275,12 +338,16 @@ DASHBOARD_HTML = '''
         // Auto-refresh every 30 seconds
         setInterval(refreshStatus, 30000);
         
+        // Refresh logs every 60 seconds
+        setInterval(refreshLogs, 60000);
+        
         // Keep-alive ping every 5 minutes
         setInterval(keepAlive, 300000);
         
         // Initial load
         document.addEventListener('DOMContentLoaded', function() {
             refreshStatus();
+            refreshLogs();
         });
     </script>
 </head>
@@ -289,6 +356,11 @@ DASHBOARD_HTML = '''
         <div class="header">
             <h1>🏠⚾ Mets Home Run Tracker</h1>
             <div class="subtitle">Real-time monitoring of every Mets home run with GIF generation</div>
+        </div>
+        
+        <div class="auto-status">
+            <h3>🤖 Automatic Background Service</h3>
+            <p>This tracker runs continuously in the background, monitoring every Mets game for home runs. No manual intervention required!</p>
         </div>
         
         <div class="status-grid">
@@ -337,12 +409,26 @@ DASHBOARD_HTML = '''
                     <h3>Home Runs Queued</h3>
                     <div class="status-value" id="hrs-queued">--</div>
                 </div>
+                
+                <div class="status-card">
+                    <h3>Processed Plays</h3>
+                    <div class="status-value" id="processed-plays">--</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="logs-section">
+            <h2>📄 Recent Activity Logs</h2>
+            <div id="logs-container">
+                <div class="log-item">Loading recent logs...</div>
             </div>
         </div>
         
         <div class="refresh-info">
             🔄 Dashboard refreshes automatically every 30 seconds<br>
-            ❤️ Keep-alive ping sent every 5 minutes
+            📄 Logs refresh every 60 seconds<br>
+            ❤️ Keep-alive ping sent every 5 minutes<br>
+            🤖 Background service runs continuously
         </div>
         
         <div class="footer">
@@ -354,9 +440,41 @@ DASHBOARD_HTML = '''
 </html>
 '''
 
+def auto_start_tracker():
+    """Automatically start the tracker when the dashboard starts"""
+    global tracker, tracker_thread, auto_started
+    
+    if not auto_started:
+        logger.info("🤖 Auto-starting Mets Home Run Tracker background service...")
+        
+        try:
+            tracker = MetsHomeRunTracker()
+            
+            def run_tracker():
+                try:
+                    # Get keep-alive URL for this dashboard
+                    base_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://mets-hrs.onrender.com')
+                    keep_alive_url = f"{base_url}/api/ping"
+                    logger.info(f"🔄 Keep-alive URL: {keep_alive_url}")
+                    
+                    tracker.monitor_mets_home_runs(keep_alive_url)
+                except Exception as e:
+                    logger.error(f"💥 Tracker error: {e}")
+            
+            tracker_thread = threading.Thread(target=run_tracker, daemon=True)
+            tracker_thread.start()
+            auto_started = True
+            
+            logger.info("✅ Mets Home Run Tracker auto-started successfully!")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to auto-start tracker: {e}")
+
 @app.route('/')
 def dashboard():
     """Main dashboard page"""
+    # Auto-start tracker on first page load
+    auto_start_tracker()
     return render_template_string(DASHBOARD_HTML)
 
 @app.route('/api/status')
@@ -383,6 +501,40 @@ def get_status():
     
     return jsonify(status)
 
+@app.route('/api/logs')
+def get_logs():
+    """Get recent log entries"""
+    try:
+        log_lines = []
+        
+        # Try to read from multiple log files
+        log_files = ['mets_dashboard.log', 'mets_homerun_tracker.log']
+        
+        for log_file in log_files:
+            if os.path.exists(log_file):
+                try:
+                    with open(log_file, 'r') as f:
+                        lines = f.readlines()
+                        # Get last 10 lines from each file
+                        recent_lines = lines[-10:] if len(lines) > 10 else lines
+                        for line in recent_lines:
+                            if line.strip():
+                                log_lines.append(line.strip())
+                except Exception as e:
+                    logger.error(f"Error reading {log_file}: {e}")
+        
+        # Sort by timestamp and keep most recent 20
+        log_lines = sorted(log_lines)[-20:]
+        
+        if not log_lines:
+            log_lines = [f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - INFO - System started, waiting for activity..."]
+        
+        return jsonify({'logs': log_lines})
+        
+    except Exception as e:
+        logger.error(f"Error getting logs: {e}")
+        return jsonify({'logs': [f"Error retrieving logs: {e}"]})
+
 @app.route('/api/start', methods=['POST'])
 def start_monitoring():
     """Start the monitoring system"""
@@ -399,10 +551,11 @@ def start_monitoring():
         def run_tracker():
             try:
                 # Get keep-alive URL for this dashboard
-                keep_alive_url = request.url_root + 'api/ping'
+                base_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://mets-hrs.onrender.com')
+                keep_alive_url = f"{base_url}/api/ping"
                 tracker.monitor_mets_home_runs(keep_alive_url)
             except Exception as e:
-                app.logger.error(f"Tracker error: {e}")
+                logger.error(f"Tracker error: {e}")
         
         tracker_thread = threading.Thread(target=run_tracker, daemon=True)
         tracker_thread.start()
@@ -433,7 +586,12 @@ def stop_monitoring():
 @app.route('/api/ping')
 def ping():
     """Keep-alive endpoint"""
-    return jsonify({'status': 'alive', 'timestamp': datetime.now().isoformat()})
+    logger.info("💓 Keep-alive ping received")
+    return jsonify({
+        'status': 'alive', 
+        'timestamp': datetime.now().isoformat(),
+        'service': 'mets-homerun-tracker'
+    })
 
 @app.route('/health')
 def health_check():
@@ -441,7 +599,9 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'mets-homerun-tracker',
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now().isoformat(),
+        'auto_started': auto_started,
+        'monitoring_active': tracker.monitoring_active if tracker else False
     })
 
 def run_dashboard(host='0.0.0.0', port=None, debug=False):
@@ -455,14 +615,16 @@ def run_dashboard(host='0.0.0.0', port=None, debug=False):
         import logging
         logging.getLogger('werkzeug').setLevel(logging.WARNING)
     
-    app.logger.info(f"Starting Mets Home Run Tracker Dashboard on {host}:{port}")
+    logger.info(f"🚀 Starting Mets Home Run Tracker Dashboard on {host}:{port}")
+    logger.info(f"🔗 Dashboard will be available at: https://mets-hrs.onrender.com")
+    logger.info(f"🤖 Background tracker will auto-start on first page load")
     
     try:
         app.run(host=host, port=port, debug=debug, threaded=True)
     except Exception as e:
-        app.logger.error(f"Failed to start dashboard: {e}")
+        logger.error(f"❌ Failed to start dashboard: {e}")
         raise
 
 if __name__ == '__main__':
     # Run dashboard
-    run_dashboard(debug=True) 
+    run_dashboard(debug=False) 
