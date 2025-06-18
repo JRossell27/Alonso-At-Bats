@@ -507,8 +507,8 @@ def format_tweet(play_data):
 def keep_alive():
     """Enhanced keep-alive mechanism with better error handling"""
     try:
-        # Try to ping our own service
-        response = requests.get("https://alonso-at-bat-tracker.onrender.com/", timeout=5)
+        # Try to ping our own service - updated URL
+        response = requests.get("https://alonso-at-bats.onrender.com/", timeout=5)
         if response.status_code == 200:
             logger.debug("Keep-alive ping successful")
         else:
