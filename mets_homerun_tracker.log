@@ -39,3 +39,16 @@
 2025-06-18 10:42:16,444 - INFO - --------------------------------------------------
 2025-06-18 10:42:16,444 - INFO - OVERALL: 4/4 tests passed
 2025-06-18 10:42:16,444 - INFO - 🎉 ALL TESTS PASSED! Mets HR Tracker is ready!
+2025-06-19 20:54:08,085 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,085 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,086 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,086 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,086 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,086 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,086 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,087 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,087 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,093 - mets_dashboard - INFO - 🤖 Auto-starting Mets Home Run Tracker background service...
+2025-06-19 20:54:08,093 - mets_homerun_tracker - ERROR - ❌ DISCORD_WEBHOOK_URL environment variable not set!
+2025-06-19 20:54:08,093 - mets_dashboard - ERROR - ❌ Failed to auto-start tracker: DISCORD_WEBHOOK_URL environment variable is required
+2025-06-19 20:54:08,096 - mets_dashboard - INFO - 💓 Keep-alive ping received

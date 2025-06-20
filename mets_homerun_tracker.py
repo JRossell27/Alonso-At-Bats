@@ -138,10 +138,14 @@ class MetsHomeRunTracker:
             response.raise_for_status()
             data = response.json()
             
-            games = []
+            # Separate games by priority
+            live_games = []      # Live games (highest priority)
+            warmup_games = []    # Warmup/Preview games (high priority)
+            scheduled_games = [] # Scheduled games (low priority)
+            final_games = []     # Recently completed games (medium priority)
+            
             for date_data in data.get('dates', []):
                 for game in date_data.get('games', []):
-                    # Include live, preview, and recently completed games
                     status_code = game.get('status', {}).get('statusCode', '')
                     status_desc = game.get('status', {}).get('detailedState', 'Unknown')
                     
@@ -149,9 +153,34 @@ class MetsHomeRunTracker:
                     away_team = game.get('teams', {}).get('away', {}).get('team', {}).get('name', 'Unknown')
                     home_team = game.get('teams', {}).get('home', {}).get('team', {}).get('name', 'Unknown')
                     
-                    if status_code in ['I', 'P', 'S', 'F']:  # Live, Preview, Scheduled, Final
-                        games.append(game)
-                        logger.info(f"🎯 Monitoring game: {away_team} @ {home_team} - Status: {status_desc}")
+                    # Categorize games by status (prioritize live games)
+                    if status_code == 'I':  # Live/In Progress - HIGHEST PRIORITY
+                        live_games.append(game)
+                        logger.info(f"🔴 LIVE GAME: {away_team} @ {home_team} - Status: {status_desc}")
+                    elif status_code == 'P':  # Preview/Warmup - HIGH PRIORITY
+                        warmup_games.append(game)
+                        logger.info(f"🟡 WARMUP GAME: {away_team} @ {home_team} - Status: {status_desc}")
+                    elif status_code == 'F':  # Final/Recently completed - MEDIUM PRIORITY
+                        final_games.append(game)
+                        logger.info(f"🟢 COMPLETED GAME: {away_team} @ {home_team} - Status: {status_desc}")
+                    elif status_code == 'S':  # Scheduled - LOWEST PRIORITY
+                        scheduled_games.append(game)
+                        logger.info(f"⚪ SCHEDULED GAME: {away_team} @ {home_team} - Status: {status_desc}")
+            
+            # Return games in priority order: Live > Warmup > Final > Scheduled
+            # If there are live games, prioritize those completely
+            if live_games:
+                logger.info(f"🎯 Prioritizing {len(live_games)} LIVE GAME(S) over {len(warmup_games + final_games + scheduled_games)} other games")
+                games = live_games
+            elif warmup_games:
+                logger.info(f"🎯 Prioritizing {len(warmup_games)} WARMUP GAME(S) over {len(final_games + scheduled_games)} other games") 
+                games = warmup_games
+            elif final_games:
+                logger.info(f"🎯 Monitoring {len(final_games)} recently COMPLETED GAME(S)")
+                games = final_games
+            else:
+                logger.info(f"🎯 No active games - monitoring {len(scheduled_games)} SCHEDULED GAME(S)")
+                games = scheduled_games
             
             # Reset consecutive errors on success
             self.consecutive_errors = 0

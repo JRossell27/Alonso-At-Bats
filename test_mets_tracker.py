@@ -63,6 +63,70 @@ class TestMetsHomeRunTracker(unittest.TestCase):
         self.assertEqual(games[0]['gamePk'], 12345)
     
     @patch('requests.get')
+    def test_game_prioritization(self, mock_get):
+        """Test that live games are prioritized over scheduled games"""
+        # Mock response with both live and scheduled games
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            'dates': [{
+                'games': [
+                    {
+                        'gamePk': 11111,
+                        'teams': {
+                            'home': {'team': {'id': 121, 'name': 'New York Mets'}},
+                            'away': {'team': {'id': 111, 'name': 'Philadelphia Phillies'}}
+                        },
+                        'status': {'statusCode': 'S', 'detailedState': 'Scheduled'}  # Scheduled game
+                    },
+                    {
+                        'gamePk': 22222,
+                        'teams': {
+                            'home': {'team': {'id': 112, 'name': 'Chicago Cubs'}},
+                            'away': {'team': {'id': 121, 'name': 'New York Mets'}}
+                        },
+                        'status': {'statusCode': 'I', 'detailedState': 'In Progress'}  # Live game
+                    }
+                ]
+            }]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+        
+        games = self.tracker.get_live_mets_games()
+        
+        # Should return only the live game (22222), not the scheduled one (11111)
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]['gamePk'], 22222)
+        self.assertEqual(games[0]['status']['statusCode'], 'I')
+    
+    @patch('requests.get')
+    def test_scheduled_games_when_no_live_games(self, mock_get):
+        """Test that scheduled games are returned when no live games exist"""
+        # Mock response with only scheduled games
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            'dates': [{
+                'games': [{
+                    'gamePk': 33333,
+                    'teams': {
+                        'home': {'team': {'id': 121, 'name': 'New York Mets'}},
+                        'away': {'team': {'id': 111, 'name': 'Philadelphia Phillies'}}
+                    },
+                    'status': {'statusCode': 'S', 'detailedState': 'Scheduled'}
+                }]
+            }]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+        
+        games = self.tracker.get_live_mets_games()
+        
+        # Should return the scheduled game when no live games exist
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]['gamePk'], 33333)
+        self.assertEqual(games[0]['status']['statusCode'], 'S')
+    
+    @patch('requests.get')
     def test_get_game_plays(self, mock_get):
         """Test getting plays from a game"""
         mock_response = Mock()
