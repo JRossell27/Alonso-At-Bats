@@ -133,13 +133,36 @@ class MetsHomeRunTracker:
         try:
             # Use Eastern Time for date calculation (MLB games are typically scheduled in ET)
             eastern = pytz.timezone('US/Eastern')
-            today = datetime.now(eastern).strftime('%Y-%m-%d')
-            url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&teamId={self.mets_team_id}"
+            now_et = datetime.now(eastern)
             
-            self.stats['api_calls_today'] += 1
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            # Check both today and yesterday to handle games that cross midnight
+            today = now_et.strftime('%Y-%m-%d')
+            yesterday = (now_et - timedelta(days=1)).strftime('%Y-%m-%d')
+            
+            all_games = []
+            dates_to_check = [today, yesterday]
+            
+            for date_str in dates_to_check:
+                try:
+                    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}&teamId={self.mets_team_id}"
+                    self.stats['api_calls_today'] += 1
+                    response = requests.get(url, timeout=10)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    for date_data in data.get('dates', []):
+                        for game in date_data.get('games', []):
+                            # Add date context to game for logging
+                            game['_query_date'] = date_str
+                            all_games.append(game)
+                            
+                except Exception as e:
+                    logger.warning(f"⚠️ Error checking games for {date_str}: {e}")
+                    continue
+            
+            if not all_games:
+                logger.info("📅 No Mets games found for today or yesterday")
+                return []
             
             # Separate games by priority
             live_games = []      # Live games (highest priority)
@@ -147,28 +170,28 @@ class MetsHomeRunTracker:
             scheduled_games = [] # Scheduled games (low priority)
             final_games = []     # Recently completed games (medium priority)
             
-            for date_data in data.get('dates', []):
-                for game in date_data.get('games', []):
-                    status_code = game.get('status', {}).get('statusCode', '')
-                    status_desc = game.get('status', {}).get('detailedState', 'Unknown')
-                    
-                    # Log game information
-                    away_team = game.get('teams', {}).get('away', {}).get('team', {}).get('name', 'Unknown')
-                    home_team = game.get('teams', {}).get('home', {}).get('team', {}).get('name', 'Unknown')
-                    
-                    # Categorize games by status (prioritize live games)
-                    if status_code == 'I':  # Live/In Progress - HIGHEST PRIORITY
-                        live_games.append(game)
-                        logger.info(f"🔴 LIVE GAME: {away_team} @ {home_team} - Status: {status_desc}")
-                    elif status_code == 'P':  # Preview/Warmup - HIGH PRIORITY
-                        warmup_games.append(game)
-                        logger.info(f"🟡 WARMUP GAME: {away_team} @ {home_team} - Status: {status_desc}")
-                    elif status_code == 'F':  # Final/Recently completed - MEDIUM PRIORITY
-                        final_games.append(game)
-                        logger.info(f"🟢 COMPLETED GAME: {away_team} @ {home_team} - Status: {status_desc}")
-                    elif status_code == 'S':  # Scheduled - LOWEST PRIORITY
-                        scheduled_games.append(game)
-                        logger.info(f"⚪ SCHEDULED GAME: {away_team} @ {home_team} - Status: {status_desc}")
+            for game in all_games:
+                status_code = game.get('status', {}).get('statusCode', '')
+                status_desc = game.get('status', {}).get('detailedState', 'Unknown')
+                query_date = game.get('_query_date', 'unknown')
+                
+                # Log game information
+                away_team = game.get('teams', {}).get('away', {}).get('team', {}).get('name', 'Unknown')
+                home_team = game.get('teams', {}).get('home', {}).get('team', {}).get('name', 'Unknown')
+                
+                # Categorize games by status (prioritize live games)
+                if status_code == 'I':  # Live/In Progress - HIGHEST PRIORITY
+                    live_games.append(game)
+                    logger.info(f"🔴 LIVE GAME: {away_team} @ {home_team} - Status: {status_desc} (from {query_date})")
+                elif status_code == 'P':  # Preview/Warmup - HIGH PRIORITY
+                    warmup_games.append(game)
+                    logger.info(f"🟡 WARMUP GAME: {away_team} @ {home_team} - Status: {status_desc} (from {query_date})")
+                elif status_code == 'F':  # Final/Recently completed - MEDIUM PRIORITY
+                    final_games.append(game)
+                    logger.info(f"🟢 COMPLETED GAME: {away_team} @ {home_team} - Status: {status_desc} (from {query_date})")
+                elif status_code == 'S':  # Scheduled - LOWEST PRIORITY
+                    scheduled_games.append(game)
+                    logger.info(f"⚪ SCHEDULED GAME: {away_team} @ {home_team} - Status: {status_desc} (from {query_date})")
             
             # Return games in priority order: Live > Warmup > Final > Scheduled
             # If there are live games, prioritize those completely
