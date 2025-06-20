@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Set
 from threading import Thread
 import queue
 import json
+import pytz
 
 # Import our modules
 from discord_integration import post_home_run
@@ -130,7 +131,9 @@ class MetsHomeRunTracker:
     def get_live_mets_games(self) -> List[Dict]:
         """Get live Mets games from MLB API"""
         try:
-            today = datetime.now().strftime('%Y-%m-%d')
+            # Use Eastern Time for date calculation (MLB games are typically scheduled in ET)
+            eastern = pytz.timezone('US/Eastern')
+            today = datetime.now(eastern).strftime('%Y-%m-%d')
             url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&teamId={self.mets_team_id}"
             
             self.stats['api_calls_today'] += 1
